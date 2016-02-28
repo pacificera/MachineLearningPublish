@@ -1,0 +1,91 @@
+---
+title: "Coursera Data Science Machine Learning Assignment"
+author: "David Williams"
+date: "February 27, 2016"
+output: html_document
+---
+# Weightlifting Movement Quality Detection
+This document examines the potential of machine learning techniques in order to detect the quality of weightlifting movements.  The [source data](http://groupware.les.inf.puc-rio.br/har#dataset) for this experiment is composed of data from accelerometers on the belt, forearm, arm, and dumbell.  These instruments were worn by 6 participants.  Each was asked to perform the lift correctly (Classe A) and then incorrectly with 4 different common errors (Classes B through E).  The original researches attempted to create a machine learning algorithm to classify the movements, but they abandoned this for another approach.  The original researchers obtained an accuracy of [98.2% accuracy with their machine learning model based on sliding time-windows.](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf).  
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# load some libraries and surpress all the messages with echo = false
+library(dplyr)
+library(caret)
+library(lubridate)
+library(ggplot2)
+library(doMC)
+```
+
+## Data Loading and Initial Exploratory Analysis
+First we will load the training data set and perform some exploratory analysis on it.  I do some prefiltering to translater non-numerical values to NAs.
+
+```{r, warning=FALSE}
+training <- read.csv("data/pml-training.csv", na.strings=c("NA","","#DIV/0!"))
+testing <-  read.csv("data/pml-testing.csv", na.strings=c("NA","","#DIV/0!"))
+
+dim(training)
+dim(testing)
+table(training$classe)
+
+```
+So we start with 19k observations in 160 variables for training and 20 observersations in our test set.
+
+## Data Wrangling
+The train set also has some data fields for dates, times, and time-windows that we are not going to use in our analysis so we will discard those variables.  Without time-domain analysis we are essentially trying to identify what class of movement any given set of sensor readings belongs to independently of all the other obsevations which composed the movement.  Removing time-domain variables also makes it much easier to split our data into training and validation sets.  I also decided to remove all columns that contain no data (NAs).  This avoids some issues with the random forest algorithm I use below and it doesn't sacrifice any accuracy.
+
+```{r, warning=FALSE}
+training <- training[,-c(1:7)]
+training <- training[,colSums(is.na(training)) == 0] # drop columns where all the values are NA
+
+str(training)
+```
+So we have reduced our search space from 160 variables down to 53.  The remaining variables are all related x, y, z, roll, pitch, yaw, and acceleration numerical measurements.
+
+## Prediction Study Design
+The test data set contains no outcomes so we are going to need to split our train set up so that we can do some validation with the outcomes that we do have.  We will cut the training data randomly into two sets.  We will use 75% of the training data to build our model and reserve 25% for validating our prediction.
+
+```{r, warning=FALSE}
+
+set.seed(123)
+inTrain = createDataPartition(training$classe, p = 3/4)[[1]]
+train = training[inTrain,]
+validate = training[-inTrain,]
+dim(train)
+dim(validate)
+```
+
+## Training a model
+
+Now we will train a model.  I started with an attempt to run a random forest algorithm using only default tuning parameters. I choose random forest because it is often very accurate.  This simple approach took too long.  So I tried various tuning parameters until I found a set that works well for this model and runs in less than 2 minutes on my machine.  I use cross validation with 5 resampling iterations to decrease the search space.
+
+```{r train, cache = TRUE, warning=FALSE}
+registerDoMC(cores = 8) # life is good ...
+rf <- train(data = train, classe ~ ., method="rf", trControl=trainControl(method="cv",number=5))
+```
+
+## Out-of-sample data error estimation
+Now let's predict and check the accuracy of our prediction on the validation data set:
+```{r, warning=FALSE, message=FALSE}
+rfp <- predict(rf, validate)
+cm <- confusionMatrix(validate$classe, rfp)
+cm$overall
+
+```
+This is quite a good result, better than the original researchers' machine learning accuracy. So let's predict the out-of-sample error rate:
+
+```{r, warning=FALSE}
+accuracy <- cm$overall[1]
+sprintf("accuracy: %f%%", accuracy * 100)
+
+out_of_sample_error_rate <- 1 - as.numeric(accuracy)
+sprintf("out of sample error rate: %f%%", out_of_sample_error_rate * 100)
+```
+
+## Predict the 'classe' of the test cases
+Next we apply the model to the test cases so that they can be submitted as part of the assignment:
+```{r, warning=FALSE}
+tp <- predict(rf, testing)
+testing$classe <- tp
+print(tp)
+```
